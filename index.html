@@ -38,7 +38,6 @@
     }
     #startBtn:active { transform: translate(-50%, -50%) scale(.96); }
     #startBtn:disabled { background: #888; box-shadow: none; }
-    /* 大字讀數（距離 / 速度） */
     #bigReadout {
       position: fixed; left: 0; right: 0; top: 46px;
       text-align: center; z-index: 12; pointer-events: none;
@@ -66,20 +65,75 @@
       background: rgba(120,0,0,.85); border-radius: 12px;
       z-index: 30; display: none; white-space: pre-wrap;
     }
-    /* 控制面板 */
-    #panel {
-      position: fixed; left: 0; right: 0; bottom: 0;
-      padding: 10px 14px 16px;
-      background: linear-gradient(to top, rgba(0,0,0,.7), rgba(0,0,0,0));
-      z-index: 15; display: none;
+
+    /* Toast 通知 */
+    #toast {
+      position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%);
+      padding: 16px 28px; border-radius: 14px;
+      background: rgba(42,157,143,.92); color: #fff;
+      font-size: 18px; font-weight: bold; text-align: center;
+      z-index: 60; pointer-events: none;
+      opacity: 0; transition: opacity .3s;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 4px 20px rgba(0,0,0,.5);
+    }
+    #toast.show { opacity: 1; }
+
+    /* 齒輪按鈕 */
+    #gearBtn {
+      position: fixed; right: 12px; bottom: 28px;
+      width: 48px; height: 48px; border-radius: 50%;
+      background: rgba(255,255,255,.2); border: none;
+      color: #fff; font-size: 26px; z-index: 16;
+      cursor: pointer; display: none; backdrop-filter: blur(4px);
+    }
+    #gearBtn:active { transform: scale(.92); }
+
+    /* 設定頁面 overlay */
+    #settings {
+      position: fixed; inset: 0; z-index: 50;
+      background: rgba(0,0,0,.92); backdrop-filter: blur(8px);
+      display: none; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      padding: 0 0 40px;
+    }
+    #settings.show { display: block; }
+    #settings .hdr {
+      position: sticky; top: 0; z-index: 1;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 16px; background: rgba(0,0,0,.85);
+      border-bottom: 1px solid rgba(255,255,255,.15);
+      font-size: 18px; font-weight: bold;
+    }
+    #settings .hdr button {
+      background: none; border: none; color: #fff;
+      font-size: 28px; cursor: pointer; padding: 0 4px;
+    }
+    #settings .section {
+      padding: 14px 16px 6px;
       font-size: 13px;
     }
-    #panel.show { display: block; }
-    .row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
-    .row label { width: 88px; flex: none; }
+    #settings .section-title {
+      font-size: 14px; font-weight: bold; color: #aaa;
+      margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+    .row label { width: 100px; flex: none; font-size: 14px; }
     .row input[type=range] { flex: 1; }
     .row .val { width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
-    .row.chk { gap: 6px; }
+    .row.chk { gap: 8px; }
+    .row.chk label { width: auto; }
+    .mode-btns { display: flex; gap: 8px; margin: 6px 0 10px; }
+    .mode-btns button {
+      flex: 1; padding: 10px; border: 2px solid #555; border-radius: 10px;
+      background: transparent; color: #fff; font-size: 14px; font-weight: bold;
+      cursor: pointer;
+    }
+    .mode-btns button.active { border-color: #39ff14; color: #39ff14; }
+    .calib-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; flex-wrap: wrap; }
+    .calib-row button {
+      padding: 8px 12px; border: none; border-radius: 8px;
+      color: #fff; font-size: 13px; cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -91,75 +145,84 @@
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
   <div id="dbg"></div>
-  <div id="version">v0.6.0</div>
+  <div id="version">v0.7.2</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
+  <button id="gearBtn">⚙</button>
+  <div id="toast"></div>
 
-  <div id="panel">
-    <div class="row" style="gap:8px">
-      <button id="motionBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#e76f51;color:#fff;font-weight:bold">🏃 動態偵測（實際用）</button>
+  <!-- 設定頁面 -->
+  <div id="settings">
+    <div class="hdr">
+      <span>⚙ 設定</span>
+      <button id="closeSettings">✕</button>
     </div>
-    <div class="row" style="gap:8px">
-      <button id="calibBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#457b9d;color:#fff;font-weight:bold">📏 比例尺校正</button>
-      <span id="calibState" style="flex:none">未校正</span>
+
+    <div class="section">
+      <div class="section-title">偵測模式</div>
+      <div class="mode-btns">
+        <button id="modeMotion">🏃 動態偵測</button>
+        <button id="modeBright">💡 亮度偵測</button>
+      </div>
     </div>
-    <div id="rowCalib" class="row" style="display:none;gap:6px;flex-wrap:wrap">
-      <label style="width:auto">已知長度cm</label>
-      <input type="number" id="calibDist" value="100" style="width:64px;padding:4px">
-      <button id="calibStart" style="flex:1;padding:6px;border:none;border-radius:8px;background:#2a9d8f;color:#fff">開始：點兩端</button>
-      <button id="calibClear" style="flex:none;padding:6px 10px;border:none;border-radius:8px;background:#555;color:#fff">清除</button>
+
+    <div class="section">
+      <div class="section-title">比例尺校正</div>
+      <div style="margin:4px 0 8px;color:#ccc" id="calibState">未校正</div>
+      <div class="calib-row">
+        <label style="width:auto;font-size:14px">已知長度cm</label>
+        <input type="number" id="calibDist" value="100" style="width:64px;padding:6px;border-radius:6px;border:1px solid #555;background:#222;color:#fff">
+      </div>
+      <div class="calib-row">
+        <button id="calibStart" style="flex:1;background:#2a9d8f">📏 開始：點兩端</button>
+        <button id="calibClear" style="background:#555">清除</button>
+      </div>
     </div>
-    <div class="row" style="gap:8px">
-      <button id="pickBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#2a9d8f;color:#fff;font-weight:bold">🎯 點球鎖定顏色</button>
-      <button id="resetBtn" style="flex:none;padding:8px 12px;border:none;border-radius:8px;background:#555;color:#fff">改用亮度</button>
+
+    <div class="section">
+      <div class="section-title">偵測參數</div>
+      <div id="rowMotion" class="row" style="display:none">
+        <label>移動靈敏度</label>
+        <input type="range" id="thMot" min="8" max="80" value="50">
+        <span class="val" id="vMot">50</span>
+      </div>
+      <div id="rowBright" class="row">
+        <label>亮度門檻</label>
+        <input type="range" id="thBright" min="120" max="255" value="200">
+        <span class="val" id="vBright">200</span>
+      </div>
+      <div id="rowSat" class="row">
+        <label>飽和度上限</label>
+        <input type="range" id="thSat" min="0" max="150" value="60">
+        <span class="val" id="vSat">60</span>
+      </div>
+      <div class="row">
+        <label>最小尺寸(px)</label>
+        <input type="range" id="thMin" min="2" max="40" value="6">
+        <span class="val" id="vMin">6</span>
+      </div>
+      <div class="row">
+        <label>最大尺寸(px)</label>
+        <input type="range" id="thMax" min="20" max="320" value="120">
+        <span class="val" id="vMax">120</span>
+      </div>
+      <div class="row">
+        <label>出手門檻km/h</label>
+        <input type="range" id="thThrow" min="5" max="60" value="15">
+        <span class="val" id="vThrow">15</span>
+      </div>
     </div>
-    <div id="rowMotion" class="row" style="display:none">
-      <label>移動靈敏度</label>
-      <input type="range" id="thMot" min="8" max="80" value="25">
-      <span class="val" id="vMot">25</span>
-    </div>
-    <div id="rowBright" class="row">
-      <label>亮度門檻</label>
-      <input type="range" id="thBright" min="120" max="255" value="200">
-      <span class="val" id="vBright">200</span>
-    </div>
-    <div id="rowSat" class="row">
-      <label>飽和度上限</label>
-      <input type="range" id="thSat" min="0" max="150" value="60">
-      <span class="val" id="vSat">60</span>
-    </div>
-    <div id="rowTol" class="row" style="display:none">
-      <label>顏色容差</label>
-      <input type="range" id="thTol" min="20" max="240" value="90">
-      <span class="val" id="vTol">90</span>
-    </div>
-    <div class="row">
-      <label>最小尺寸(px)</label>
-      <input type="range" id="thMin" min="2" max="40" value="6">
-      <span class="val" id="vMin">6</span>
-    </div>
-    <div class="row">
-      <label>最大尺寸(px)</label>
-      <input type="range" id="thMax" min="20" max="320" value="120">
-      <span class="val" id="vMax">120</span>
-    </div>
-    <div class="row">
-      <label>偵測範圍%</label>
-      <input type="range" id="thRoi" min="20" max="100" value="45">
-      <span class="val" id="vRoi">45</span>
-    </div>
-    <div class="row">
-      <label>出手門檻km/h</label>
-      <input type="range" id="thThrow" min="5" max="60" value="20">
-      <span class="val" id="vThrow">20</span>
-    </div>
-    <div class="row chk">
-      <input type="checkbox" id="showMask">
-      <label for="showMask" style="width:auto">顯示偵測遮罩（除錯用）</label>
-    </div>
-    <div class="row chk">
-      <input type="checkbox" id="voiceOn" checked>
-      <label for="voiceOn" style="width:auto">🔊 語音報速</label>
+
+    <div class="section">
+      <div class="section-title">其他</div>
+      <div class="row chk">
+        <input type="checkbox" id="showMask">
+        <label for="showMask">顯示偵測遮罩（除錯用）</label>
+      </div>
+      <div class="row chk">
+        <input type="checkbox" id="voiceOn" checked>
+        <label for="voiceOn">🔊 語音報速</label>
+      </div>
     </div>
   </div>
 
@@ -170,66 +233,59 @@
     const statusEl = document.getElementById('status');
     const startBtn = document.getElementById('startBtn');
     const errorEl  = document.getElementById('error');
-    const panel    = document.getElementById('panel');
+    const gearBtn  = document.getElementById('gearBtn');
+    const settingsEl = document.getElementById('settings');
 
     // 控制元件
     const thBright = document.getElementById('thBright');
     const thSat    = document.getElementById('thSat');
     const thMin    = document.getElementById('thMin');
     const thMax    = document.getElementById('thMax');
-    const thRoi    = document.getElementById('thRoi');
-    const thTol    = document.getElementById('thTol');
     const showMask = document.getElementById('showMask');
     const vBright  = document.getElementById('vBright');
     const vSat     = document.getElementById('vSat');
     const vMin     = document.getElementById('vMin');
     const vMax     = document.getElementById('vMax');
-    const vRoi     = document.getElementById('vRoi');
-    const vTol     = document.getElementById('vTol');
     const thMot    = document.getElementById('thMot');
     const vMot     = document.getElementById('vMot');
-    const pickBtn  = document.getElementById('pickBtn');
-    const resetBtn = document.getElementById('resetBtn');
-    const motionBtn= document.getElementById('motionBtn');
     const rowBright= document.getElementById('rowBright');
     const rowSat   = document.getElementById('rowSat');
-    const rowTol   = document.getElementById('rowTol');
     const rowMotion= document.getElementById('rowMotion');
     const bigReadout = document.getElementById('bigReadout');
-    // 校正元件
-    const calibBtn = document.getElementById('calibBtn');
-    const calibState = document.getElementById('calibState');
-    const rowCalib = document.getElementById('rowCalib');
-    const calibDist = document.getElementById('calibDist');
-    const calibStartBtn = document.getElementById('calibStart');
-    const calibClearBtn = document.getElementById('calibClear');
-
     const thThrow  = document.getElementById('thThrow');
     const vThrow   = document.getElementById('vThrow');
     const voiceOn  = document.getElementById('voiceOn');
 
-    const BALL_CM = 7.3;                 // 棒球直徑（保留備用）
-    let pxPerMeter = null;               // 比例尺（proc 座標的 px/m）
-    let calibPicking = false;            // 是否正在校正中（等待點兩端）
-    let calibPt1 = null;                 // 校正第一點 {x,y}（proc 座標）
+    // 校正元件
+    const calibState = document.getElementById('calibState');
+    const calibDist = document.getElementById('calibDist');
+    const calibStartBtn = document.getElementById('calibStart');
+    const calibClearBtn = document.getElementById('calibClear');
+
+    // 模式按鈕
+    const modeMotionBtn = document.getElementById('modeMotion');
+    const modeBrightBtn = document.getElementById('modeBright');
+
+    const BALL_CM = 7.3;
+    let pxPerMeter = null;
+    let calibPicking = false;
+    let calibPt1 = null;
 
     // ---- 速度量測狀態 ----
-    let track = [];           // 一次飛行中的 {t, cx(proc px)} 取樣
-    let throwActive = false;  // 是否在一次投球進行中
-    let lastSpeed = null;     // 最後完成的一次球速 km/h
-    let lastDetectT = 0;      // 上次偵測到球的時間
+    let track = [];
+    let throwActive = false;
+    let lastSpeed = null;
+    let lastDetectT = 0;
 
     // 直線擬合估速（側面版）：cx(px) vs t → 斜率=px/s → m/s → km/h
-    // 不限方向（球可左飛或右飛），用絕對值。
     function estimateSpeed(s){
       const n = s.length;
       if (n < 2) return { valid:false, n };
       const t0 = s[0].t;
-      const span = (s[n-1].t - t0)/1000;          // 總時間 (s)
-      const dxPx = s[n-1].cx - s[0].cx;           // 水平像素位移
-      // 只有兩點：簡單斜率
+      const span = (s[n-1].t - t0)/1000;
+      const dxPx = s[n-1].cx - s[0].cx;
       if (n === 2){
-        const slopePx = span>0 ? dxPx/span : 0;   // px/s
+        const slopePx = span>0 ? dxPx/span : 0;
         let reason='';
         if (Math.abs(dxPx)<3) reason='移動太小';
         else if (span<0.02) reason='時間太短';
@@ -237,12 +293,11 @@
         const ms = pxPerMeter ? Math.abs(slopePx)/pxPerMeter : 0;
         return { valid:reason===''&&ms>0, kmh:ms*3.6, r2:1, n, dxPx, slopePx, reason };
       }
-      // 三點以上：最小二乘直線擬合
       let sx=0, sy=0, sxx=0, sxy=0;
       for (const p of s){ const x=(p.t-t0)/1000, y=p.cx; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
       const den = n*sxx - sx*sx;
       if (den === 0) return { valid:false, n, reason:'時間重疊' };
-      const slopePx = (n*sxy - sx*sy)/den;        // px/s
+      const slopePx = (n*sxy - sx*sy)/den;
       const intercept = (sy - slopePx*sx)/n;
       let ssTot=0, ssRes=0; const my=sy/n;
       for (const p of s){ const x=(p.t-t0)/1000, y=p.cx; const f=slopePx*x+intercept; ssRes+=(y-f)*(y-f); ssTot+=(y-my)*(y-my); }
@@ -256,36 +311,39 @@
       return { valid:reason===''&&ms>0, kmh:ms*3.6, r2, n, dxPx, slopePx, reason };
     }
 
-    // ---- 語音報速（Web Speech API）----
+    // ---- 語音報速（念兩次）----
     function speak(kmh){
       if(!voiceOn.checked || !window.speechSynthesis) return;
       try {
-        const u = new SpeechSynthesisUtterance(`${Math.round(kmh)}`);
-        u.lang = 'zh-TW'; u.rate = 1.0;
+        const txt = `${Math.round(kmh)}`;
         speechSynthesis.cancel();
-        speechSynthesis.speak(u);
+        const u1 = new SpeechSynthesisUtterance(txt);
+        u1.lang = 'zh-TW'; u1.rate = 1.0;
+        const u2 = new SpeechSynthesisUtterance(txt);
+        u2.lang = 'zh-TW'; u2.rate = 1.0;
+        speechSynthesis.speak(u1);
+        speechSynthesis.speak(u2);
       } catch(e){}
     }
-    // iOS 需在使用者手勢中先「喚醒」語音引擎
     function warmupVoice(){
       if(!window.speechSynthesis) return;
       try { const w=new SpeechSynthesisUtterance(' '); w.volume=0; speechSynthesis.speak(w); } catch(e){}
     }
 
-    // 滑桿同步顯示 + 存設定
+    // 滑桿同步
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
     bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
-    bind(thMin,vMin); bind(thMax,vMax); bind(thRoi,vRoi); bind(thTol,vTol);
+    bind(thMin,vMin); bind(thMax,vMax);
     bind(thThrow,vThrow);
 
-    // ---- 設定持久化（localStorage）----
-    const LS_KEY = 'ballspeed_settings_v2';
+    // ---- 設定持久化 ----
+    const LS_KEY = 'ballspeed_settings_v3';
     function saveSettings(){
       try {
         localStorage.setItem(LS_KEY, JSON.stringify({
           mode, pxPerMeter, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
-          thMin:thMin.value, thMax:thMax.value, thRoi:thRoi.value, thTol:thTol.value,
+          thMin:thMin.value, thMax:thMax.value,
           thThrow:thThrow.value
         }));
       } catch(e){}
@@ -295,53 +353,45 @@
       if(!s) return;
       const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
       set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
-      set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax); set(thRoi,vRoi,s.thRoi); set(thTol,vTol,s.thTol);
+      set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax);
       set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
       if(s.pxPerMeter){ pxPerMeter=s.pxPerMeter; calibState.textContent=`✓ ${pxPerMeter.toFixed(1)}px/m`; }
       if(s.mode){ mode=s.mode; applyMode(); }
     }
+
+    // ---- 偵測模式：'bright' / 'motion' ----
+    let mode = 'motion';
     function applyMode(){
       rowBright.style.display = mode==='bright'?'flex':'none';
       rowSat.style.display    = mode==='bright'?'flex':'none';
-      rowTol.style.display    = mode==='color' ?'flex':'none';
       rowMotion.style.display = mode==='motion'?'flex':'none';
+      modeMotionBtn.classList.toggle('active', mode==='motion');
+      modeBrightBtn.classList.toggle('active', mode==='bright');
     }
+    modeMotionBtn.addEventListener('click', () => { mode='motion'; applyMode(); saveSettings(); });
+    modeBrightBtn.addEventListener('click', () => { mode='bright'; applyMode(); saveSettings(); });
+    applyMode();
 
-    // ---- 比例尺校正流程（兩點） ----
-    calibBtn.addEventListener('click', () => {
-      rowCalib.style.display = rowCalib.style.display==='none' ? 'flex' : 'none';
-    });
+    // ---- 設定頁面開關 ----
+    gearBtn.addEventListener('click', () => { settingsEl.classList.add('show'); });
+    document.getElementById('closeSettings').addEventListener('click', () => { settingsEl.classList.remove('show'); });
+
+    // ---- 比例尺校正 ----
     calibStartBtn.addEventListener('click', () => {
       calibPicking = true; calibPt1 = null;
       calibState.textContent = '👆 請點第一端';
       calibStartBtn.textContent = '等待點擊…';
+      settingsEl.classList.remove('show');   // 關設定頁，回到鏡頭畫面點
     });
     calibClearBtn.addEventListener('click', () => {
       pxPerMeter = null; calibPicking = false; calibPt1 = null;
       calibState.textContent = '未校正';
-      calibStartBtn.textContent = '開始：點兩端';
+      calibStartBtn.textContent = '📏 開始：點兩端';
       saveSettings();
     });
 
-    // 偵測模式：'bright' 亮度 / 'color' 鎖定顏色
-    let mode = 'bright';
-    let targetColor = null;       // {r,g,b}
-    let pickMode = false;         // 等待使用者點球
-
-    pickBtn.addEventListener('click', () => {
-      pickMode = true;
-      pickBtn.textContent = '👆 請點畫面中的球…';
-    });
-    resetBtn.addEventListener('click', () => {
-      mode='bright'; targetColor=null;
-      applyMode(); pickBtn.textContent='🎯 點球鎖定顏色'; saveSettings();
-    });
-    motionBtn.addEventListener('click', () => {
-      mode='motion'; applyMode(); saveSettings();
-    });
-
-    // 點畫面：取色 / 比例尺校正兩點（換算 object-fit:cover 座標 → proc 像素）
+    // 點畫面：比例尺校正兩點
     function screenToProc(ev){
       const elW=overlay.clientWidth, elH=overlay.clientHeight;
       const vw=video.videoWidth, vh=video.videoHeight;
@@ -351,50 +401,29 @@
       return { x:Math.round(vidX*proc.width/vw), y:Math.round(vidY*proc.height/vh) };
     }
     document.getElementById('stage').addEventListener('click', (ev) => {
-      if (!video.videoWidth) return;
+      if (!video.videoWidth || !calibPicking) return;
       const pt = screenToProc(ev);
-
-      // ---- 比例尺校正：兩點 ----
-      if (calibPicking){
-        if (!calibPt1){
-          calibPt1 = pt;
-          calibState.textContent = '👆 請點第二端';
-        } else {
-          const dx = pt.x - calibPt1.x, dy = pt.y - calibPt1.y;
-          const pxDist = Math.sqrt(dx*dx + dy*dy);
-          const knownCm = parseFloat(calibDist.value);
-          if (!knownCm || knownCm<=0){ calibState.textContent='⚠ 長度無效'; calibPicking=false; return; }
-          if (pxDist < 5){ calibState.textContent='⚠ 兩點太近'; calibPt1=null; return; }
-          pxPerMeter = pxDist / (knownCm/100);    // proc px per meter
-          calibState.textContent = `✓ ${pxPerMeter.toFixed(1)}px/m (${pxDist.toFixed(0)}px↔${knownCm}cm)`;
-          calibPicking = false; calibPt1 = null;
-          calibStartBtn.textContent = '重新校正';
-          saveSettings();
-        }
-        return;
-      }
-
-      // ---- 點球鎖定顏色 ----
-      if (!pickMode) return;
-      pctx.drawImage(video,0,0,proc.width,proc.height);
-      let r=0,g=0,b=0,n=0;
-      for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
-        const x=pt.x+dx,y=pt.y+dy;
-        if(x<0||y<0||x>=proc.width||y>=proc.height)continue;
-        const d=pctx.getImageData(x,y,1,1).data;
-        r+=d[0];g+=d[1];b+=d[2];n++;
-      }
-      if(n>0){
-        targetColor={r:r/n,g:g/n,b:b/n};
-        mode='color'; pickMode=false; applyMode(); saveSettings();
-        pickBtn.textContent=`✓ 已鎖定 rgb(${targetColor.r|0},${targetColor.g|0},${targetColor.b|0})`;
+      if (!calibPt1){
+        calibPt1 = pt;
+        calibState.textContent = '👆 請點第二端';
+      } else {
+        const dx = pt.x - calibPt1.x, dy = pt.y - calibPt1.y;
+        const pxDist = Math.sqrt(dx*dx + dy*dy);
+        const knownCm = parseFloat(calibDist.value);
+        if (!knownCm || knownCm<=0){ calibState.textContent='⚠ 長度無效'; calibPicking=false; return; }
+        if (pxDist < 5){ calibState.textContent='⚠ 兩點太近'; calibPt1=null; return; }
+        pxPerMeter = pxDist / (knownCm/100);
+        calibState.textContent = `✓ ${pxPerMeter.toFixed(1)}px/m (${pxDist.toFixed(0)}px↔${knownCm}cm)`;
+        calibPicking = false; calibPt1 = null;
+        calibStartBtn.textContent = '📏 重新校正';
+        saveSettings();
+        showToast(`✅ 校正完成\n${pxPerMeter.toFixed(1)} px/m`);
       }
     });
 
     let stream = null, running = false, lastT = performance.now();
-    let prevGray = null, motionBuf = null;   // 動態偵測用的前後幀灰階緩衝
+    let prevGray = null, motionBuf = null;
 
-    // 離螢幕處理用 canvas（降解析度加速）
     const PROC_W = 320;
     let PROC_H = 180;
     const proc = document.createElement('canvas');
@@ -402,6 +431,16 @@
 
     function setStatus(t){ statusEl.textContent = t; }
     function showError(m){ errorEl.style.display='block'; errorEl.textContent='⚠ '+m; }
+
+    // ---- Toast 通知（自動 3 秒消失）----
+    let toastTimer = null;
+    function showToast(msg){
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(()=>{ el.classList.remove('show'); }, 3000);
+    }
 
     // ---- 開鏡頭 ----
     async function startCamera() {
@@ -411,7 +450,7 @@
         return;
       }
       startBtn.disabled = true; setStatus('📷 啟動鏡頭中…');
-      warmupVoice();   // 在使用者點擊手勢中喚醒語音（iOS 必要）
+      warmupVoice();
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { exact: 'environment' } }, audio: false });
@@ -424,8 +463,8 @@
       video.srcObject = stream;
       await video.play();
       startBtn.style.display='none';
-      panel.classList.add('show');
-      loadSettings();   // 載入上次調好的參數與校正值
+      gearBtn.style.display='block';
+      loadSettings();
 
       await waitForVideoReady();
       syncSize();
@@ -446,13 +485,13 @@
     function syncSize(){
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw||!vh) return;
-      overlay.width = vw; overlay.height = vh;          // 疊圖用影像原始座標
+      overlay.width = vw; overlay.height = vh;
       PROC_H = Math.round(PROC_W * vh / vw);
       proc.width = PROC_W; proc.height = PROC_H;
     }
 
-    // ---- 偵測迴圈：找白色圓形 blob ----
-    const visited = new Uint8Array(PROC_W * 1080); // 上限緩衝（之後依實際大小用）
+    // ---- 偵測迴圈 ----
+    const visited = new Uint8Array(PROC_W * 1080);
     function detectLoop(){
       if (!running) return;
       const ball = detectBall();
@@ -465,27 +504,20 @@
       pctx.drawImage(video, 0, 0, W, H);
       const data = pctx.getImageData(0, 0, W, H).data;
 
-      const TB = +thBright.value;   // 亮度下限
-      const TS = +thSat.value;      // 飽和度上限（越小越「純白」）
+      const TB = +thBright.value;
+      const TS = +thSat.value;
 
-      // 中央偵測框（ROI）：框外像素一律忽略
-      const roi = +thRoi.value/100;
-      const rx0 = Math.floor(W*(1-roi)/2), rx1 = Math.ceil(W*(1+roi)/2);
-      const ry0 = Math.floor(H*(1-roi)/2), ry1 = Math.ceil(H*(1+roi)/2);
+      const rx0 = 0, rx1 = W;
+      const ry0 = 0, ry1 = H;
 
-      const TOL = +thTol.value;     // 顏色容差
-      const MT  = +thMot.value;     // 移動靈敏度（灰階差門檻）
-      const useColor  = (mode==='color' && targetColor);
+      const MT  = +thMot.value;
       const useMotion = (mode==='motion');
-      const tr=useColor?targetColor.r:0, tg=useColor?targetColor.g:0, tb=useColor?targetColor.b:0;
 
-      // 動態模式：本幀灰階緩衝（與 prevGray 比較後互換）
       let gray = null;
       if (useMotion){
         gray = (motionBuf && motionBuf.length===N) ? motionBuf : new Uint8Array(N);
       }
 
-      // 建立遮罩（僅限 ROI 內）
       const mask = new Uint8Array(N);
       for (let y=ry0;y<ry1;y++){
         for (let x=rx0;x<rx1;x++){
@@ -495,19 +527,14 @@
             const gv=(r*0.299+g*0.587+b*0.114)|0;
             if (prevGray && prevGray.length===N && Math.abs(gv-prevGray[i])>MT) mask[i]=1;
             gray[i]=gv;
-          } else if (useColor){
-            const dist=Math.abs(r-tr)+Math.abs(g-tg)+Math.abs(b-tb);
-            if (dist<=TOL) mask[i]=1;
           } else {
             const max=Math.max(r,g,b), min=Math.min(r,g,b);
             if (max>=TB && (max-min)<=TS) mask[i]=1;
           }
         }
       }
-      // 換手：本幀灰階成為下一幀的 prevGray
       if (useMotion){ motionBuf = prevGray; prevGray = gray; }
 
-      // 連通元件（BFS），找最大且夠圓的 blob
       const vis = (N<=visited.length) ? visited : new Uint8Array(N);
       vis.fill(0, 0, N);
       const stack = new Int32Array(N);
@@ -525,7 +552,6 @@
           area++; sumX+=x; sumY+=y;
           if(x<minX)minX=x; if(x>maxX)maxX=x;
           if(y<minY)minY=y; if(y>maxY)maxY=y;
-          // 4 鄰居
           if(x>0   && mask[p-1] && !vis[p-1]){vis[p-1]=1; stack[sp++]=p-1;}
           if(x<W-1 && mask[p+1] && !vis[p+1]){vis[p+1]=1; stack[sp++]=p+1;}
           if(y>0   && mask[p-W] && !vis[p-W]){vis[p-W]=1; stack[sp++]=p-W;}
@@ -533,15 +559,12 @@
         }
         const bw=maxX-minX+1, bh=maxY-minY+1;
         if (bw<minPx || bh<minPx) continue;
-        if (bw>maxPx || bh>maxPx) continue;          // 淘汰過大的背景區塊（牆/燈）
-        // 圓形度：blob 面積 / 外接框面積（圓約 0.785，越接近越圓）
+        if (bw>maxPx || bh>maxPx) continue;
         const fill = area/(bw*bh);
         const aspect = bw>bh ? bw/bh : bh/bw;
-        // 動態模式：移動殘影會拉長變形，放寬圓形限制
         const fillMin = useMotion ? 0.35 : 0.6;
         const aspMax  = useMotion ? 3.0  : 1.4;
         if (fill < fillMin || aspect > aspMax) continue;
-        // 選「最圓」而非「最大」：越接近 0.785 且越方正分數越高
         const circ = (1 - Math.abs(fill - 0.785)) / aspect;
         if (circ > bestScore){
           bestScore = circ;
@@ -549,38 +572,31 @@
                    diam:(bw+bh)/2 };
         }
       }
-      return { best, mask, W, H, roi:{rx0,ry0,rx1,ry1} };
+      return { best, mask, W, H };
     }
 
     function draw(res){
-      const sx = overlay.width / res.W;   // proc → overlay 座標縮放
+      const sx = overlay.width / res.W;
       const sy = overlay.height / res.H;
       ctx.clearRect(0,0,overlay.width,overlay.height);
 
-      // 除錯遮罩
       if (showMask.checked){
         const img = ctx.createImageData(res.W, res.H);
         for (let i=0;i<res.W*res.H;i++){
           const v = res.mask[i]?255:0;
           img.data[i*4]=v; img.data[i*4+1]=v; img.data[i*4+2]=0; img.data[i*4+3]=v?140:0;
         }
-        // 放到角落小窗
         const tmp = document.createElement('canvas');
         tmp.width=res.W; tmp.height=res.H;
         tmp.getContext('2d').putImageData(img,0,0);
         ctx.drawImage(tmp, 0,0, overlay.width, overlay.height);
       }
 
-      // 中央偵測框指引線（虛線）
-      const R=res.roi;
-      ctx.lineWidth=2; ctx.setLineDash([12,10]); ctx.strokeStyle='rgba(255,255,255,.7)';
-      ctx.strokeRect(R.rx0*sx, R.ry0*sy, (R.rx1-R.rx0)*sx, (R.ry1-R.ry0)*sy);
-      ctx.setLineDash([]);
+      // （全畫面偵測，不畫 ROI 框）
 
       const now=performance.now(), fps=1000/(now-lastT); lastT=now;
-      const THROW_MIN = +thThrow.value;   // 出手判定門檻 km/h
+      const THROW_MIN = +thThrow.value;
 
-      // 投球結束判定：球消失一段時間 → 對整段軌跡擬合定案 + 報速
       if (track.length > 0 && (now - lastDetectT) > 400){
         const r = estimateSpeed(track);
         const dbg = document.getElementById('dbg');
@@ -609,8 +625,7 @@
         ctx.font='bold 26px sans-serif'; ctx.fillStyle='#39ff14';
         ctx.fillText(`⚾ ${diamOverlay.toFixed(0)}px`, cx+rpx+8, cy);
 
-        // ---- 速度量測：追蹤 cx（proc 座標），即時擬合 ----
-        track.push({ t:now, cx:b.cx });         // b.cx 是 proc 座標
+        track.push({ t:now, cx:b.cx });
         if (track.length>60) track.shift();
         lastDetectT = now;
         let curKmh = null;
@@ -629,7 +644,6 @@
       }
     }
 
-    // 大字讀數：投球中顯示即時最高速，否則顯示最後一次球速
     function updateBigReadout(activeMax){
       if (activeMax!=null && activeMax>0){
         bigReadout.innerHTML = `<span class="num" style="color:#ffd60a">${activeMax.toFixed(0)}</span><span class="unit"> km/h</span><span class="sub">測量中…</span>`;
