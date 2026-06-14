@@ -3,6 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>棒球測速器 ⚾</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -46,6 +49,11 @@
     #bigReadout .num { font-size: 13vw; }
     #bigReadout .unit { font-size: 5vw; }
     #bigReadout .sub { font-size: 4vw; color:#fff; opacity:.85; display:block; }
+    #version {
+      position: fixed; right: 6px; bottom: 4px;
+      font-size: 12px; color: #fff; opacity: .6;
+      z-index: 40; pointer-events: none;
+    }
     #error {
       position: fixed; left: 50%; top: 60%; transform: translateX(-50%);
       width: 86%; max-width: 420px; padding: 14px 16px;
@@ -77,6 +85,7 @@
 
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
+  <div id="version">v0.3.0</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
