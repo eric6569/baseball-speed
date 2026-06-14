@@ -145,7 +145,7 @@
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
   <div id="dbg"></div>
-  <div id="version">v0.7.6</div>
+  <div id="version">v0.7.7</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
   <button id="gearBtn">⚙</button>
@@ -181,6 +181,11 @@
 
     <div class="section">
       <div class="section-title">偵測參數</div>
+      <div class="row">
+        <label>處理解析度</label>
+        <input type="range" id="thProc" min="160" max="960" step="80" value="320">
+        <span class="val" id="vProc">320</span>
+      </div>
       <div id="rowMotion" class="row" style="display:none">
         <label>移動靈敏度</label>
         <input type="range" id="thMot" min="8" max="80" value="50">
@@ -247,6 +252,8 @@
     const settingsEl = document.getElementById('settings');
 
     // 控制元件
+    const thProc   = document.getElementById('thProc');
+    const vProc    = document.getElementById('vProc');
     const thBright = document.getElementById('thBright');
     const thSat    = document.getElementById('thSat');
     const thMin    = document.getElementById('thMin');
@@ -346,8 +353,10 @@
 
     // 滑桿同步
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
-    bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
+    bind(thProc,vProc); bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
     bind(thMin,vMin); bind(thMax,vMax);
+    // 處理解析度變更時同步 proc canvas
+    thProc.addEventListener('input', syncSize);
     bind(thFps,vFps); bind(thGap,vGap); bind(thThrow,vThrow);
 
     // ---- 設定持久化 ----
@@ -357,7 +366,7 @@
         localStorage.setItem(LS_KEY, JSON.stringify({
           mode, pxPerMeter, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
-          thMin:thMin.value, thMax:thMax.value,
+          thProc:thProc.value, thMin:thMin.value, thMax:thMax.value,
           thFps:thFps.value, thGap:thGap.value, thThrow:thThrow.value
         }));
       } catch(e){}
@@ -367,7 +376,7 @@
       if(!s) return;
       const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
       set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
-      set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax);
+      set(thProc,vProc,s.thProc); set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax);
       set(thFps,vFps,s.thFps); set(thGap,vGap,s.thGap); set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
       if(s.pxPerMeter){ pxPerMeter=s.pxPerMeter; calibState.textContent=`✓ ${pxPerMeter.toFixed(1)}px/m`; }
@@ -438,7 +447,7 @@
     let stream = null, running = false, lastT = performance.now();
     let prevGray = null, motionBuf = null;
 
-    const PROC_W = 320;
+    let PROC_W = 320;
     let PROC_H = 180;
     const proc = document.createElement('canvas');
     const pctx = proc.getContext('2d', { willReadFrequently: true });
@@ -500,12 +509,15 @@
       const vw = video.videoWidth, vh = video.videoHeight;
       if (!vw||!vh) return;
       overlay.width = vw; overlay.height = vh;
+      PROC_W = +(thProc.value) || 320;
       PROC_H = Math.round(PROC_W * vh / vw);
       proc.width = PROC_W; proc.height = PROC_H;
+      // 重置動態偵測緩衝（解析度變了，舊的無效）
+      prevGray = null; motionBuf = null;
     }
 
     // ---- 偵測迴圈 ----
-    const visited = new Uint8Array(PROC_W * 1080);
+    const visited = new Uint8Array(960 * 720); // 最大解析度 960 的上限緩衝
     let lastDetectFrame = 0;
     function detectLoop(){
       if (!running) return;
