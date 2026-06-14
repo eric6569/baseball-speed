@@ -54,6 +54,11 @@
       font-size: 12px; color: #fff; opacity: .6;
       z-index: 40; pointer-events: none;
     }
+    #dbg {
+      position: fixed; left: 6px; bottom: 4px; max-width: 70%;
+      font-size: 13px; color: #ffd60a; z-index: 40; pointer-events: none;
+      text-shadow: 0 1px 3px #000;
+    }
     #error {
       position: fixed; left: 50%; top: 60%; transform: translateX(-50%);
       width: 86%; max-width: 420px; padding: 14px 16px;
@@ -85,7 +90,8 @@
 
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
-  <div id="version">v0.5.1</div>
+  <div id="dbg"></div>
+  <div id="version">v0.6.0</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
@@ -94,13 +100,14 @@
       <button id="motionBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#e76f51;color:#fff;font-weight:bold">🏃 動態偵測（實際用）</button>
     </div>
     <div class="row" style="gap:8px">
-      <button id="calibBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#457b9d;color:#fff;font-weight:bold">📏 焦距校正</button>
+      <button id="calibBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#457b9d;color:#fff;font-weight:bold">📏 比例尺校正</button>
       <span id="calibState" style="flex:none">未校正</span>
     </div>
-    <div id="rowCalib" class="row" style="display:none;gap:6px">
-      <label style="width:auto">已知距離cm</label>
-      <input type="number" id="calibDist" value="300" style="width:64px;padding:4px">
-      <button id="calibCapture" style="flex:1;padding:6px;border:none;border-radius:8px;background:#2a9d8f;color:#fff">擷取目前直徑</button>
+    <div id="rowCalib" class="row" style="display:none;gap:6px;flex-wrap:wrap">
+      <label style="width:auto">已知長度cm</label>
+      <input type="number" id="calibDist" value="100" style="width:64px;padding:4px">
+      <button id="calibStart" style="flex:1;padding:6px;border:none;border-radius:8px;background:#2a9d8f;color:#fff">開始：點兩端</button>
+      <button id="calibClear" style="flex:none;padding:6px 10px;border:none;border-radius:8px;background:#555;color:#fff">清除</button>
     </div>
     <div class="row" style="gap:8px">
       <button id="pickBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#2a9d8f;color:#fff;font-weight:bold">🎯 點球鎖定顏色</button>
@@ -194,47 +201,59 @@
     const calibState = document.getElementById('calibState');
     const rowCalib = document.getElementById('rowCalib');
     const calibDist = document.getElementById('calibDist');
-    const calibCapture = document.getElementById('calibCapture');
+    const calibStartBtn = document.getElementById('calibStart');
+    const calibClearBtn = document.getElementById('calibClear');
 
     const thThrow  = document.getElementById('thThrow');
     const vThrow   = document.getElementById('vThrow');
     const voiceOn  = document.getElementById('voiceOn');
 
-    const BALL_CM = 7.3;                 // 棒球直徑
-    let focalPx = null;                  // 校正後焦距（像素）
-    const recentDiams = [];              // 近期偵測直徑（校正用，取中位數）
+    const BALL_CM = 7.3;                 // 棒球直徑（保留備用）
+    let pxPerMeter = null;               // 比例尺（proc 座標的 px/m）
+    let calibPicking = false;            // 是否正在校正中（等待點兩端）
+    let calibPt1 = null;                 // 校正第一點 {x,y}（proc 座標）
 
     // ---- 速度量測狀態 ----
-    let track = [];           // 一次飛行中的 {t, d(公尺)} 取樣
+    let track = [];           // 一次飛行中的 {t, cx(proc px)} 取樣
     let throwActive = false;  // 是否在一次投球進行中
     let lastSpeed = null;     // 最後完成的一次球速 km/h
     let lastDetectT = 0;      // 上次偵測到球的時間
 
-    // 直線擬合估速：距離應隨時間穩定變遠（球飛離鏡頭）
-    // 回傳 {valid, kmh, r2}。揮手/雜訊因不線性、非單調而被擋下。
+    // 直線擬合估速（側面版）：cx(px) vs t → 斜率=px/s → m/s → km/h
+    // 不限方向（球可左飛或右飛），用絕對值。
     function estimateSpeed(s){
       const n = s.length;
       if (n < 2) return { valid:false, n };
       const t0 = s[0].t;
-      const span = (s[n-1].t - t0)/1000;          // 總時間
-      const drange = s[n-1].d - s[0].d;           // 有號位移（>0 = 飛離）
-      // 只有兩點：用簡單斜率（需單調飛離 + 有移動）
+      const span = (s[n-1].t - t0)/1000;          // 總時間 (s)
+      const dxPx = s[n-1].cx - s[0].cx;           // 水平像素位移
+      // 只有兩點：簡單斜率
       if (n === 2){
-        const valid = drange>0 && drange>=0.15 && span>=0.02;
-        return { valid, kmh: span>0 ? Math.abs(drange)/span*3.6 : 0, r2:1, n };
+        const slopePx = span>0 ? dxPx/span : 0;   // px/s
+        let reason='';
+        if (Math.abs(dxPx)<3) reason='移動太小';
+        else if (span<0.02) reason='時間太短';
+        else if (!pxPerMeter) reason='未校正';
+        const ms = pxPerMeter ? Math.abs(slopePx)/pxPerMeter : 0;
+        return { valid:reason===''&&ms>0, kmh:ms*3.6, r2:1, n, dxPx, slopePx, reason };
       }
-      // 三點以上：最小二乘直線擬合，斜率=速度
+      // 三點以上：最小二乘直線擬合
       let sx=0, sy=0, sxx=0, sxy=0;
-      for (const p of s){ const x=(p.t-t0)/1000, y=p.d; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+      for (const p of s){ const x=(p.t-t0)/1000, y=p.cx; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
       const den = n*sxx - sx*sx;
-      if (den === 0) return { valid:false, n };
-      const slope = (n*sxy - sx*sy)/den;          // m/s
-      const intercept = (sy - slope*sx)/n;
+      if (den === 0) return { valid:false, n, reason:'時間重疊' };
+      const slopePx = (n*sxy - sx*sy)/den;        // px/s
+      const intercept = (sy - slopePx*sx)/n;
       let ssTot=0, ssRes=0; const my=sy/n;
-      for (const p of s){ const x=(p.t-t0)/1000, y=p.d; const f=slope*x+intercept; ssRes+=(y-f)*(y-f); ssTot+=(y-my)*(y-my); }
+      for (const p of s){ const x=(p.t-t0)/1000, y=p.cx; const f=slopePx*x+intercept; ssRes+=(y-f)*(y-f); ssTot+=(y-my)*(y-my); }
       const r2 = ssTot>0 ? 1 - ssRes/ssTot : 0;
-      const valid = slope>0 && r2>=0.4 && span>=0.03 && Math.abs(drange)>=0.15;
-      return { valid, kmh:Math.abs(slope)*3.6, r2, n };
+      let reason='';
+      if (Math.abs(dxPx)<3) reason='移動太小';
+      else if (r2<0.4) reason='不線性';
+      else if (span<0.03) reason='時間太短';
+      else if (!pxPerMeter) reason='未校正';
+      const ms = pxPerMeter ? Math.abs(slopePx)/pxPerMeter : 0;
+      return { valid:reason===''&&ms>0, kmh:ms*3.6, r2, n, dxPx, slopePx, reason };
     }
 
     // ---- 語音報速（Web Speech API）----
@@ -253,12 +272,6 @@
       try { const w=new SpeechSynthesisUtterance(' '); w.volume=0; speechSynthesis.speak(w); } catch(e){}
     }
 
-    function median(arr){
-      if(!arr.length) return null;
-      const s=[...arr].sort((a,b)=>a-b);
-      return s[s.length>>1];
-    }
-
     // 滑桿同步顯示 + 存設定
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
     bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
@@ -266,11 +279,11 @@
     bind(thThrow,vThrow);
 
     // ---- 設定持久化（localStorage）----
-    const LS_KEY = 'ballspeed_settings_v1';
+    const LS_KEY = 'ballspeed_settings_v2';
     function saveSettings(){
       try {
         localStorage.setItem(LS_KEY, JSON.stringify({
-          mode, focalPx, calibDist: calibDist.value,
+          mode, pxPerMeter, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
           thMin:thMin.value, thMax:thMax.value, thRoi:thRoi.value, thTol:thTol.value,
           thThrow:thThrow.value
@@ -285,7 +298,7 @@
       set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax); set(thRoi,vRoi,s.thRoi); set(thTol,vTol,s.thTol);
       set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
-      if(s.focalPx){ focalPx=s.focalPx; calibState.textContent='✓ 已校正'; }
+      if(s.pxPerMeter){ pxPerMeter=s.pxPerMeter; calibState.textContent=`✓ ${pxPerMeter.toFixed(1)}px/m`; }
       if(s.mode){ mode=s.mode; applyMode(); }
     }
     function applyMode(){
@@ -295,17 +308,19 @@
       rowMotion.style.display = mode==='motion'?'flex':'none';
     }
 
-    // ---- 校正流程 ----
+    // ---- 比例尺校正流程（兩點） ----
     calibBtn.addEventListener('click', () => {
       rowCalib.style.display = rowCalib.style.display==='none' ? 'flex' : 'none';
     });
-    calibCapture.addEventListener('click', () => {
-      const d = median(recentDiams);
-      const known = parseFloat(calibDist.value);
-      if(!d){ calibState.textContent='⚠ 先讓球被偵測到'; return; }
-      if(!known || known<=0){ calibState.textContent='⚠ 距離無效'; return; }
-      focalPx = d * known / BALL_CM;
-      calibState.textContent = `✓ 已校正 (${focalPx.toFixed(0)}px)`;
+    calibStartBtn.addEventListener('click', () => {
+      calibPicking = true; calibPt1 = null;
+      calibState.textContent = '👆 請點第一端';
+      calibStartBtn.textContent = '等待點擊…';
+    });
+    calibClearBtn.addEventListener('click', () => {
+      pxPerMeter = null; calibPicking = false; calibPt1 = null;
+      calibState.textContent = '未校正';
+      calibStartBtn.textContent = '開始：點兩端';
       saveSettings();
     });
 
@@ -326,20 +341,45 @@
       mode='motion'; applyMode(); saveSettings();
     });
 
-    // 點畫面取色（換算 object-fit:cover 座標 → proc 像素）
-    document.getElementById('stage').addEventListener('click', (ev) => {
-      if (!pickMode || !video.videoWidth) return;
+    // 點畫面：取色 / 比例尺校正兩點（換算 object-fit:cover 座標 → proc 像素）
+    function screenToProc(ev){
       const elW=overlay.clientWidth, elH=overlay.clientHeight;
       const vw=video.videoWidth, vh=video.videoHeight;
       const scale=Math.max(elW/vw, elH/vh);
       const offX=(elW-vw*scale)/2, offY=(elH-vh*scale)/2;
       const vidX=(ev.clientX-offX)/scale, vidY=(ev.clientY-offY)/scale;
-      const px=Math.round(vidX*proc.width/vw), py=Math.round(vidY*proc.height/vh);
+      return { x:Math.round(vidX*proc.width/vw), y:Math.round(vidY*proc.height/vh) };
+    }
+    document.getElementById('stage').addEventListener('click', (ev) => {
+      if (!video.videoWidth) return;
+      const pt = screenToProc(ev);
+
+      // ---- 比例尺校正：兩點 ----
+      if (calibPicking){
+        if (!calibPt1){
+          calibPt1 = pt;
+          calibState.textContent = '👆 請點第二端';
+        } else {
+          const dx = pt.x - calibPt1.x, dy = pt.y - calibPt1.y;
+          const pxDist = Math.sqrt(dx*dx + dy*dy);
+          const knownCm = parseFloat(calibDist.value);
+          if (!knownCm || knownCm<=0){ calibState.textContent='⚠ 長度無效'; calibPicking=false; return; }
+          if (pxDist < 5){ calibState.textContent='⚠ 兩點太近'; calibPt1=null; return; }
+          pxPerMeter = pxDist / (knownCm/100);    // proc px per meter
+          calibState.textContent = `✓ ${pxPerMeter.toFixed(1)}px/m (${pxDist.toFixed(0)}px↔${knownCm}cm)`;
+          calibPicking = false; calibPt1 = null;
+          calibStartBtn.textContent = '重新校正';
+          saveSettings();
+        }
+        return;
+      }
+
+      // ---- 點球鎖定顏色 ----
+      if (!pickMode) return;
       pctx.drawImage(video,0,0,proc.width,proc.height);
-      // 取點擊處 5×5 平均色，較穩定
       let r=0,g=0,b=0,n=0;
       for(let dy=-2;dy<=2;dy++)for(let dx=-2;dx<=2;dx++){
-        const x=px+dx,y=py+dy;
+        const x=pt.x+dx,y=pt.y+dy;
         if(x<0||y<0||x>=proc.width||y>=proc.height)continue;
         const d=pctx.getImageData(x,y,1,1).data;
         r+=d[0];g+=d[1];b+=d[2];n++;
@@ -543,9 +583,15 @@
       // 投球結束判定：球消失一段時間 → 對整段軌跡擬合定案 + 報速
       if (track.length > 0 && (now - lastDetectT) > 400){
         const r = estimateSpeed(track);
+        const dbg = document.getElementById('dbg');
+        let why = r.reason || '';
+        if (r.valid && r.kmh < THROW_MIN) why = `低於門檻(${r.kmh.toFixed(0)}<${THROW_MIN})`;
         if (r.valid && r.kmh >= THROW_MIN){
           lastSpeed = r.kmh;
           speak(lastSpeed);
+          dbg.textContent = `✅報速 點${r.n} R²${(r.r2||0).toFixed(2)} Δ${(r.dxPx||0).toFixed(0)}px 速${r.kmh.toFixed(0)}`;
+        } else {
+          dbg.textContent = `❌${why} 點${r.n} R²${(r.r2!=null?r.r2.toFixed(2):'-')} Δ${(r.dxPx!=null?r.dxPx.toFixed(0):'-')}px 速${r.kmh!=null?r.kmh.toFixed(0):'-'}`;
         }
         throwActive = false; track = [];
       }
@@ -560,33 +606,22 @@
         ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill();
         const diamOverlay = b.diam*((sx+sy)/2);
 
-        // 累積近期直徑（給校正取中位數用）
-        recentDiams.push(diamOverlay);
-        if (recentDiams.length>30) recentDiams.shift();
-
-        // 距離計算：distance_cm = focalPx × 球徑 / 像素直徑
-        let distM = null;
-        if (focalPx){ distM = (focalPx * BALL_CM / diamOverlay) / 100; }
-
         ctx.font='bold 26px sans-serif'; ctx.fillStyle='#39ff14';
         ctx.fillText(`⚾ ${diamOverlay.toFixed(0)}px`, cx+rpx+8, cy);
 
-        // ---- 速度量測：累積整段軌跡，即時擬合 ----
+        // ---- 速度量測：追蹤 cx（proc 座標），即時擬合 ----
+        track.push({ t:now, cx:b.cx });         // b.cx 是 proc 座標
+        if (track.length>60) track.shift();
+        lastDetectT = now;
         let curKmh = null;
-        if (distM!=null){
-          track.push({ t:now, d:distM });
-          if (track.length>60) track.shift();        // 上限保護
-          lastDetectT = now;
-          const live = estimateSpeed(track);
-          if (live.valid){
-            curKmh = live.kmh;
-            if (live.kmh >= THROW_MIN) throwActive = true;
-          }
+        const live = estimateSpeed(track);
+        if (live.valid){
+          curKmh = live.kmh;
+          if (live.kmh >= THROW_MIN) throwActive = true;
         }
         updateBigReadout(throwActive && curKmh!=null ? curKmh : null);
-        const live2 = estimateSpeed(track);
-        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}　點數${track.length} R²${live2.r2!=null?live2.r2.toFixed(2):'-'}\n⚾ ${diamOverlay.toFixed(0)}px`
-          + (distM!=null?` 距離${distM.toFixed(2)}m`:' 尚未校正')
+        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}　點${track.length} R²${live.r2!=null?live.r2.toFixed(2):'-'}`
+          + (pxPerMeter?` 比例尺${pxPerMeter.toFixed(1)}px/m`:' ⚠未校正')
           + (curKmh!=null?` 即時${curKmh.toFixed(0)}km/h`:''));
       } else {
         updateBigReadout(null);
