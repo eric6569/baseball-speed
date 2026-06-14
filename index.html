@@ -35,6 +35,17 @@
     }
     #startBtn:active { transform: translate(-50%, -50%) scale(.96); }
     #startBtn:disabled { background: #888; box-shadow: none; }
+    /* 大字讀數（距離 / 速度） */
+    #bigReadout {
+      position: fixed; left: 0; right: 0; top: 46px;
+      text-align: center; z-index: 12; pointer-events: none;
+      font-weight: 900; color: #39ff14;
+      text-shadow: 0 2px 8px rgba(0,0,0,.9), 0 0 4px rgba(0,0,0,.9);
+      line-height: 1.1;
+    }
+    #bigReadout .num { font-size: 13vw; }
+    #bigReadout .unit { font-size: 5vw; }
+    #bigReadout .sub { font-size: 4vw; color:#fff; opacity:.85; display:block; }
     #error {
       position: fixed; left: 50%; top: 60%; transform: translateX(-50%);
       width: 86%; max-width: 420px; padding: 14px 16px;
@@ -65,12 +76,22 @@
   </div>
 
   <div id="status">📷 等待啟動…</div>
+  <div id="bigReadout"></div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
   <div id="panel">
     <div class="row" style="gap:8px">
       <button id="motionBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#e76f51;color:#fff;font-weight:bold">🏃 動態偵測（實際用）</button>
+    </div>
+    <div class="row" style="gap:8px">
+      <button id="calibBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#457b9d;color:#fff;font-weight:bold">📏 焦距校正</button>
+      <span id="calibState" style="flex:none">未校正</span>
+    </div>
+    <div id="rowCalib" class="row" style="display:none;gap:6px">
+      <label style="width:auto">已知距離cm</label>
+      <input type="number" id="calibDist" value="300" style="width:64px;padding:4px">
+      <button id="calibCapture" style="flex:1;padding:6px;border:none;border-radius:8px;background:#2a9d8f;color:#fff">擷取目前直徑</button>
     </div>
     <div class="row" style="gap:8px">
       <button id="pickBtn" style="flex:1;padding:8px;border:none;border-radius:8px;background:#2a9d8f;color:#fff;font-weight:bold">🎯 點球鎖定顏色</button>
@@ -149,13 +170,70 @@
     const rowSat   = document.getElementById('rowSat');
     const rowTol   = document.getElementById('rowTol');
     const rowMotion= document.getElementById('rowMotion');
-    thMot.oninput  = () => vMot.textContent = thMot.value;
-    thBright.oninput = () => vBright.textContent = thBright.value;
-    thSat.oninput    = () => vSat.textContent    = thSat.value;
-    thMin.oninput    = () => vMin.textContent    = thMin.value;
-    thMax.oninput    = () => vMax.textContent    = thMax.value;
-    thRoi.oninput    = () => vRoi.textContent    = thRoi.value;
-    thTol.oninput    = () => vTol.textContent    = thTol.value;
+    const bigReadout = document.getElementById('bigReadout');
+    // 校正元件
+    const calibBtn = document.getElementById('calibBtn');
+    const calibState = document.getElementById('calibState');
+    const rowCalib = document.getElementById('rowCalib');
+    const calibDist = document.getElementById('calibDist');
+    const calibCapture = document.getElementById('calibCapture');
+
+    const BALL_CM = 7.3;                 // 棒球直徑
+    let focalPx = null;                  // 校正後焦距（像素）
+    const recentDiams = [];              // 近期偵測直徑（校正用，取中位數）
+
+    function median(arr){
+      if(!arr.length) return null;
+      const s=[...arr].sort((a,b)=>a-b);
+      return s[s.length>>1];
+    }
+
+    // 滑桿同步顯示 + 存設定
+    function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
+    bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
+    bind(thMin,vMin); bind(thMax,vMax); bind(thRoi,vRoi); bind(thTol,vTol);
+
+    // ---- 設定持久化（localStorage）----
+    const LS_KEY = 'ballspeed_settings_v1';
+    function saveSettings(){
+      try {
+        localStorage.setItem(LS_KEY, JSON.stringify({
+          mode, focalPx, calibDist: calibDist.value,
+          thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
+          thMin:thMin.value, thMax:thMax.value, thRoi:thRoi.value, thTol:thTol.value
+        }));
+      } catch(e){}
+    }
+    function loadSettings(){
+      let s; try { s = JSON.parse(localStorage.getItem(LS_KEY)); } catch(e){}
+      if(!s) return;
+      const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
+      set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
+      set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax); set(thRoi,vRoi,s.thRoi); set(thTol,vTol,s.thTol);
+      if(s.calibDist!=null) calibDist.value=s.calibDist;
+      if(s.focalPx){ focalPx=s.focalPx; calibState.textContent='✓ 已校正'; }
+      if(s.mode){ mode=s.mode; applyMode(); }
+    }
+    function applyMode(){
+      rowBright.style.display = mode==='bright'?'flex':'none';
+      rowSat.style.display    = mode==='bright'?'flex':'none';
+      rowTol.style.display    = mode==='color' ?'flex':'none';
+      rowMotion.style.display = mode==='motion'?'flex':'none';
+    }
+
+    // ---- 校正流程 ----
+    calibBtn.addEventListener('click', () => {
+      rowCalib.style.display = rowCalib.style.display==='none' ? 'flex' : 'none';
+    });
+    calibCapture.addEventListener('click', () => {
+      const d = median(recentDiams);
+      const known = parseFloat(calibDist.value);
+      if(!d){ calibState.textContent='⚠ 先讓球被偵測到'; return; }
+      if(!known || known<=0){ calibState.textContent='⚠ 距離無效'; return; }
+      focalPx = d * known / BALL_CM;
+      calibState.textContent = `✓ 已校正 (${focalPx.toFixed(0)}px)`;
+      saveSettings();
+    });
 
     // 偵測模式：'bright' 亮度 / 'color' 鎖定顏色
     let mode = 'bright';
@@ -168,14 +246,10 @@
     });
     resetBtn.addEventListener('click', () => {
       mode='bright'; targetColor=null;
-      rowBright.style.display='flex'; rowSat.style.display='flex';
-      rowTol.style.display='none'; rowMotion.style.display='none';
-      pickBtn.textContent='🎯 點球鎖定顏色';
+      applyMode(); pickBtn.textContent='🎯 點球鎖定顏色'; saveSettings();
     });
     motionBtn.addEventListener('click', () => {
-      mode='motion';
-      rowBright.style.display='none'; rowSat.style.display='none';
-      rowTol.style.display='none'; rowMotion.style.display='flex';
+      mode='motion'; applyMode(); saveSettings();
     });
 
     // 點畫面取色（換算 object-fit:cover 座標 → proc 像素）
@@ -198,8 +272,7 @@
       }
       if(n>0){
         targetColor={r:r/n,g:g/n,b:b/n};
-        mode='color'; pickMode=false;
-        rowBright.style.display='none'; rowSat.style.display='none'; rowTol.style.display='flex';
+        mode='color'; pickMode=false; applyMode(); saveSettings();
         pickBtn.textContent=`✓ 已鎖定 rgb(${targetColor.r|0},${targetColor.g|0},${targetColor.b|0})`;
       }
     });
@@ -237,6 +310,7 @@
       await video.play();
       startBtn.style.display='none';
       panel.classList.add('show');
+      loadSettings();   // 載入上次調好的參數與校正值
 
       await waitForVideoReady();
       syncSize();
@@ -399,13 +473,28 @@
         ctx.fillStyle='#39ff14';
         ctx.beginPath(); ctx.arc(cx,cy,4,0,Math.PI*2); ctx.fill();
         const diamOverlay = b.diam*((sx+sy)/2);
-        ctx.font='bold 26px sans-serif';
-        const label=`⚾ 直徑 ${diamOverlay.toFixed(0)}px`;
-        ctx.fillStyle='#39ff14';
-        ctx.fillText(label, cx+rpx+8, cy);
-        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps\n⚾ 球像素直徑 ${diamOverlay.toFixed(0)}px　圓形度 ${(b.fill).toFixed(2)}`);
+
+        // 累積近期直徑（給校正取中位數用）
+        recentDiams.push(diamOverlay);
+        if (recentDiams.length>30) recentDiams.shift();
+
+        // 距離計算：distance_cm = focalPx × 球徑 / 像素直徑
+        let distM = null;
+        if (focalPx){ distM = (focalPx * BALL_CM / diamOverlay) / 100; }
+
+        ctx.font='bold 26px sans-serif'; ctx.fillStyle='#39ff14';
+        ctx.fillText(`⚾ ${diamOverlay.toFixed(0)}px`, cx+rpx+8, cy);
+
+        // 大字讀數：有校正顯示距離，否則顯示直徑
+        if (distM!=null){
+          bigReadout.innerHTML = `<span class="num">${distM.toFixed(2)}</span><span class="unit"> m</span><span class="sub">距離鏡頭</span>`;
+        } else {
+          bigReadout.innerHTML = `<span class="num">${diamOverlay.toFixed(0)}</span><span class="unit"> px</span><span class="sub">球像素直徑（尚未校正）</span>`;
+        }
+        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps　模式:${mode}\n⚾ 直徑 ${diamOverlay.toFixed(0)}px${distM!=null?`　距離 ${distM.toFixed(2)}m`:''}`);
       } else {
-        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps\n🔍 未找到白色圓形（調整下方亮度門檻試試）`);
+        bigReadout.innerHTML='';
+        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps　模式:${mode}\n🔍 未偵測到球`);
       }
     }
 
