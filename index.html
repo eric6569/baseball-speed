@@ -85,7 +85,7 @@
 
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
-  <div id="version">v0.4.0</div>
+  <div id="version">v0.5.0</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
@@ -207,15 +207,35 @@
     // ---- 速度量測狀態 ----
     let track = [];           // 一次飛行中的 {t, d(公尺)} 取樣
     let throwActive = false;  // 是否在一次投球進行中
-    let throwMax = 0;         // 本次投球最高速 km/h
     let lastSpeed = null;     // 最後完成的一次球速 km/h
     let lastDetectT = 0;      // 上次偵測到球的時間
+
+    // 直線擬合估速：距離應隨時間穩定變遠（球飛離鏡頭）
+    // 回傳 {valid, kmh, r2}。揮手/雜訊因不線性、非單調而被擋下。
+    function estimateSpeed(s){
+      const n = s.length;
+      if (n < 3) return { valid:false };
+      const t0 = s[0].t;
+      let sx=0, sy=0, sxx=0, sxy=0;
+      for (const p of s){ const x=(p.t-t0)/1000, y=p.d; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+      const den = n*sxx - sx*sx;
+      if (den === 0) return { valid:false };
+      const slope = (n*sxy - sx*sy)/den;        // m/s
+      const intercept = (sy - slope*sx)/n;
+      let ssTot=0, ssRes=0; const my=sy/n;
+      for (const p of s){ const x=(p.t-t0)/1000, y=p.d; const f=slope*x+intercept; ssRes+=(y-f)*(y-f); ssTot+=(y-my)*(y-my); }
+      const r2 = ssTot>0 ? 1 - ssRes/ssTot : 0;
+      const span = (s[n-1].t - t0)/1000;        // 總時間
+      const drange = Math.abs(s[n-1].d - s[0].d);// 總位移
+      const valid = slope>0 && r2>=0.55 && span>=0.05 && drange>=0.4;
+      return { valid, kmh:Math.abs(slope)*3.6, r2 };
+    }
 
     // ---- 語音報速（Web Speech API）----
     function speak(kmh){
       if(!voiceOn.checked || !window.speechSynthesis) return;
       try {
-        const u = new SpeechSynthesisUtterance(`時速 ${Math.round(kmh)} 公里`);
+        const u = new SpeechSynthesisUtterance(`${Math.round(kmh)}`);
         u.lang = 'zh-TW'; u.rate = 1.0;
         speechSynthesis.cancel();
         speechSynthesis.speak(u);
@@ -514,13 +534,14 @@
       const now=performance.now(), fps=1000/(now-lastT); lastT=now;
       const THROW_MIN = +thThrow.value;   // 出手判定門檻 km/h
 
-      // 投球結束判定：球消失一段時間且本次有達到出手速度 → 定案 + 報速
-      if (throwActive && (now - lastDetectT) > 350){
-        if (throwMax >= THROW_MIN){
-          lastSpeed = throwMax;
+      // 投球結束判定：球消失一段時間 → 對整段軌跡擬合定案 + 報速
+      if (track.length > 0 && (now - lastDetectT) > 400){
+        const r = estimateSpeed(track);
+        if (r.valid && r.kmh >= THROW_MIN){
+          lastSpeed = r.kmh;
           speak(lastSpeed);
         }
-        throwActive = false; throwMax = 0; track = [];
+        throwActive = false; track = [];
       }
 
       if (res.best){
@@ -544,26 +565,19 @@
         ctx.font='bold 26px sans-serif'; ctx.fillStyle='#39ff14';
         ctx.fillText(`⚾ ${diamOverlay.toFixed(0)}px`, cx+rpx+8, cy);
 
-        // ---- 速度量測 ----
+        // ---- 速度量測：累積整段軌跡，即時擬合 ----
         let curKmh = null;
         if (distM!=null){
           track.push({ t:now, d:distM });
-          while (track.length>1 && now-track[0].t>400) track.shift();  // 保留近 0.4s
-          if (track.length>=2){
-            const a=track[0], b=track[track.length-1];
-            const dt=(b.t-a.t)/1000;
-            if (dt>0.02){
-              const v = Math.abs(b.d-a.d)/dt;     // m/s
-              curKmh = v*3.6;
-              if (curKmh >= THROW_MIN){
-                throwActive = true;
-                if (curKmh > throwMax) throwMax = curKmh;
-              }
-            }
-          }
+          if (track.length>60) track.shift();        // 上限保護
           lastDetectT = now;
+          const live = estimateSpeed(track);
+          if (live.valid){
+            curKmh = live.kmh;
+            if (live.kmh >= THROW_MIN) throwActive = true;
+          }
         }
-        updateBigReadout(throwActive ? throwMax : null);
+        updateBigReadout(throwActive && curKmh!=null ? curKmh : null);
         setStatus(`✅ ${fps.toFixed(0)}fps ${mode}\n⚾ ${diamOverlay.toFixed(0)}px`
           + (distM!=null?` 距離${distM.toFixed(2)}m`:' 尚未校正')
           + (curKmh!=null?` 即時${curKmh.toFixed(0)}km/h`:''));
