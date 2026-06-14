@@ -85,7 +85,7 @@
 
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
-  <div id="version">v0.3.0</div>
+  <div id="version">v0.4.0</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
@@ -141,9 +141,18 @@
       <input type="range" id="thRoi" min="20" max="100" value="45">
       <span class="val" id="vRoi">45</span>
     </div>
+    <div class="row">
+      <label>出手門檻km/h</label>
+      <input type="range" id="thThrow" min="5" max="60" value="20">
+      <span class="val" id="vThrow">20</span>
+    </div>
     <div class="row chk">
       <input type="checkbox" id="showMask">
       <label for="showMask" style="width:auto">顯示偵測遮罩（除錯用）</label>
+    </div>
+    <div class="row chk">
+      <input type="checkbox" id="voiceOn" checked>
+      <label for="voiceOn" style="width:auto">🔊 語音報速</label>
     </div>
   </div>
 
@@ -187,9 +196,36 @@
     const calibDist = document.getElementById('calibDist');
     const calibCapture = document.getElementById('calibCapture');
 
+    const thThrow  = document.getElementById('thThrow');
+    const vThrow   = document.getElementById('vThrow');
+    const voiceOn  = document.getElementById('voiceOn');
+
     const BALL_CM = 7.3;                 // 棒球直徑
     let focalPx = null;                  // 校正後焦距（像素）
     const recentDiams = [];              // 近期偵測直徑（校正用，取中位數）
+
+    // ---- 速度量測狀態 ----
+    let track = [];           // 一次飛行中的 {t, d(公尺)} 取樣
+    let throwActive = false;  // 是否在一次投球進行中
+    let throwMax = 0;         // 本次投球最高速 km/h
+    let lastSpeed = null;     // 最後完成的一次球速 km/h
+    let lastDetectT = 0;      // 上次偵測到球的時間
+
+    // ---- 語音報速（Web Speech API）----
+    function speak(kmh){
+      if(!voiceOn.checked || !window.speechSynthesis) return;
+      try {
+        const u = new SpeechSynthesisUtterance(`時速 ${Math.round(kmh)} 公里`);
+        u.lang = 'zh-TW'; u.rate = 1.0;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(u);
+      } catch(e){}
+    }
+    // iOS 需在使用者手勢中先「喚醒」語音引擎
+    function warmupVoice(){
+      if(!window.speechSynthesis) return;
+      try { const w=new SpeechSynthesisUtterance(' '); w.volume=0; speechSynthesis.speak(w); } catch(e){}
+    }
 
     function median(arr){
       if(!arr.length) return null;
@@ -201,6 +237,7 @@
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
     bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
     bind(thMin,vMin); bind(thMax,vMax); bind(thRoi,vRoi); bind(thTol,vTol);
+    bind(thThrow,vThrow);
 
     // ---- 設定持久化（localStorage）----
     const LS_KEY = 'ballspeed_settings_v1';
@@ -209,7 +246,8 @@
         localStorage.setItem(LS_KEY, JSON.stringify({
           mode, focalPx, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
-          thMin:thMin.value, thMax:thMax.value, thRoi:thRoi.value, thTol:thTol.value
+          thMin:thMin.value, thMax:thMax.value, thRoi:thRoi.value, thTol:thTol.value,
+          thThrow:thThrow.value
         }));
       } catch(e){}
     }
@@ -219,6 +257,7 @@
       const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
       set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
       set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax); set(thRoi,vRoi,s.thRoi); set(thTol,vTol,s.thTol);
+      set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
       if(s.focalPx){ focalPx=s.focalPx; calibState.textContent='✓ 已校正'; }
       if(s.mode){ mode=s.mode; applyMode(); }
@@ -306,6 +345,7 @@
         return;
       }
       startBtn.disabled = true; setStatus('📷 啟動鏡頭中…');
+      warmupVoice();   // 在使用者點擊手勢中喚醒語音（iOS 必要）
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { exact: 'environment' } }, audio: false });
@@ -472,6 +512,16 @@
       ctx.setLineDash([]);
 
       const now=performance.now(), fps=1000/(now-lastT); lastT=now;
+      const THROW_MIN = +thThrow.value;   // 出手判定門檻 km/h
+
+      // 投球結束判定：球消失一段時間且本次有達到出手速度 → 定案 + 報速
+      if (throwActive && (now - lastDetectT) > 350){
+        if (throwMax >= THROW_MIN){
+          lastSpeed = throwMax;
+          speak(lastSpeed);
+        }
+        throwActive = false; throwMax = 0; track = [];
+      }
 
       if (res.best){
         const b=res.best;
@@ -494,16 +544,43 @@
         ctx.font='bold 26px sans-serif'; ctx.fillStyle='#39ff14';
         ctx.fillText(`⚾ ${diamOverlay.toFixed(0)}px`, cx+rpx+8, cy);
 
-        // 大字讀數：有校正顯示距離，否則顯示直徑
+        // ---- 速度量測 ----
+        let curKmh = null;
         if (distM!=null){
-          bigReadout.innerHTML = `<span class="num">${distM.toFixed(2)}</span><span class="unit"> m</span><span class="sub">距離鏡頭</span>`;
-        } else {
-          bigReadout.innerHTML = `<span class="num">${diamOverlay.toFixed(0)}</span><span class="unit"> px</span><span class="sub">球像素直徑（尚未校正）</span>`;
+          track.push({ t:now, d:distM });
+          while (track.length>1 && now-track[0].t>400) track.shift();  // 保留近 0.4s
+          if (track.length>=2){
+            const a=track[0], b=track[track.length-1];
+            const dt=(b.t-a.t)/1000;
+            if (dt>0.02){
+              const v = Math.abs(b.d-a.d)/dt;     // m/s
+              curKmh = v*3.6;
+              if (curKmh >= THROW_MIN){
+                throwActive = true;
+                if (curKmh > throwMax) throwMax = curKmh;
+              }
+            }
+          }
+          lastDetectT = now;
         }
-        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps　模式:${mode}\n⚾ 直徑 ${diamOverlay.toFixed(0)}px${distM!=null?`　距離 ${distM.toFixed(2)}m`:''}`);
+        updateBigReadout(throwActive ? throwMax : null);
+        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}\n⚾ ${diamOverlay.toFixed(0)}px`
+          + (distM!=null?` 距離${distM.toFixed(2)}m`:' 尚未校正')
+          + (curKmh!=null?` 即時${curKmh.toFixed(0)}km/h`:''));
       } else {
-        bigReadout.innerHTML='';
-        setStatus(`✅ 偵測中　${fps.toFixed(0)} fps　模式:${mode}\n🔍 未偵測到球`);
+        updateBigReadout(null);
+        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}\n🔍 未偵測到球`);
+      }
+    }
+
+    // 大字讀數：投球中顯示即時最高速，否則顯示最後一次球速
+    function updateBigReadout(activeMax){
+      if (activeMax!=null && activeMax>0){
+        bigReadout.innerHTML = `<span class="num" style="color:#ffd60a">${activeMax.toFixed(0)}</span><span class="unit"> km/h</span><span class="sub">測量中…</span>`;
+      } else if (lastSpeed!=null){
+        bigReadout.innerHTML = `<span class="num">${lastSpeed.toFixed(0)}</span><span class="unit"> km/h</span><span class="sub">最後球速</span>`;
+      } else {
+        bigReadout.innerHTML = '';
       }
     }
 
