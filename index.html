@@ -85,7 +85,7 @@
 
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
-  <div id="version">v0.5.0</div>
+  <div id="version">v0.5.1</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
 
@@ -214,21 +214,27 @@
     // 回傳 {valid, kmh, r2}。揮手/雜訊因不線性、非單調而被擋下。
     function estimateSpeed(s){
       const n = s.length;
-      if (n < 3) return { valid:false };
+      if (n < 2) return { valid:false, n };
       const t0 = s[0].t;
+      const span = (s[n-1].t - t0)/1000;          // 總時間
+      const drange = s[n-1].d - s[0].d;           // 有號位移（>0 = 飛離）
+      // 只有兩點：用簡單斜率（需單調飛離 + 有移動）
+      if (n === 2){
+        const valid = drange>0 && drange>=0.15 && span>=0.02;
+        return { valid, kmh: span>0 ? Math.abs(drange)/span*3.6 : 0, r2:1, n };
+      }
+      // 三點以上：最小二乘直線擬合，斜率=速度
       let sx=0, sy=0, sxx=0, sxy=0;
       for (const p of s){ const x=(p.t-t0)/1000, y=p.d; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
       const den = n*sxx - sx*sx;
-      if (den === 0) return { valid:false };
-      const slope = (n*sxy - sx*sy)/den;        // m/s
+      if (den === 0) return { valid:false, n };
+      const slope = (n*sxy - sx*sy)/den;          // m/s
       const intercept = (sy - slope*sx)/n;
       let ssTot=0, ssRes=0; const my=sy/n;
       for (const p of s){ const x=(p.t-t0)/1000, y=p.d; const f=slope*x+intercept; ssRes+=(y-f)*(y-f); ssTot+=(y-my)*(y-my); }
       const r2 = ssTot>0 ? 1 - ssRes/ssTot : 0;
-      const span = (s[n-1].t - t0)/1000;        // 總時間
-      const drange = Math.abs(s[n-1].d - s[0].d);// 總位移
-      const valid = slope>0 && r2>=0.55 && span>=0.05 && drange>=0.4;
-      return { valid, kmh:Math.abs(slope)*3.6, r2 };
+      const valid = slope>0 && r2>=0.4 && span>=0.03 && Math.abs(drange)>=0.15;
+      return { valid, kmh:Math.abs(slope)*3.6, r2, n };
     }
 
     // ---- 語音報速（Web Speech API）----
@@ -578,7 +584,8 @@
           }
         }
         updateBigReadout(throwActive && curKmh!=null ? curKmh : null);
-        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}\n⚾ ${diamOverlay.toFixed(0)}px`
+        const live2 = estimateSpeed(track);
+        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}　點數${track.length} R²${live2.r2!=null?live2.r2.toFixed(2):'-'}\n⚾ ${diamOverlay.toFixed(0)}px`
           + (distM!=null?` 距離${distM.toFixed(2)}m`:' 尚未校正')
           + (curKmh!=null?` 即時${curKmh.toFixed(0)}km/h`:''));
       } else {
