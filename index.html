@@ -145,7 +145,7 @@
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
   <div id="dbg"></div>
-  <div id="version">v0.7.2</div>
+  <div id="version">v0.7.5</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
   <button id="gearBtn">⚙</button>
@@ -207,6 +207,11 @@
         <span class="val" id="vMax">120</span>
       </div>
       <div class="row">
+        <label>偵測頻率fps</label>
+        <input type="range" id="thFps" min="5" max="60" value="20">
+        <span class="val" id="vFps">20</span>
+      </div>
+      <div class="row">
         <label>出手門檻km/h</label>
         <input type="range" id="thThrow" min="5" max="60" value="15">
         <span class="val" id="vThrow">15</span>
@@ -252,6 +257,8 @@
     const rowSat   = document.getElementById('rowSat');
     const rowMotion= document.getElementById('rowMotion');
     const bigReadout = document.getElementById('bigReadout');
+    const thFps    = document.getElementById('thFps');
+    const vFps     = document.getElementById('vFps');
     const thThrow  = document.getElementById('thThrow');
     const vThrow   = document.getElementById('vThrow');
     const voiceOn  = document.getElementById('voiceOn');
@@ -318,9 +325,9 @@
         const txt = `${Math.round(kmh)}`;
         speechSynthesis.cancel();
         const u1 = new SpeechSynthesisUtterance(txt);
-        u1.lang = 'zh-TW'; u1.rate = 1.0;
+        u1.lang = 'zh-TW'; u1.rate = 0.75;
         const u2 = new SpeechSynthesisUtterance(txt);
-        u2.lang = 'zh-TW'; u2.rate = 1.0;
+        u2.lang = 'zh-TW'; u2.rate = 0.75;
         speechSynthesis.speak(u1);
         speechSynthesis.speak(u2);
       } catch(e){}
@@ -334,7 +341,7 @@
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
     bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
     bind(thMin,vMin); bind(thMax,vMax);
-    bind(thThrow,vThrow);
+    bind(thFps,vFps); bind(thThrow,vThrow);
 
     // ---- 設定持久化 ----
     const LS_KEY = 'ballspeed_settings_v3';
@@ -344,7 +351,7 @@
           mode, pxPerMeter, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
           thMin:thMin.value, thMax:thMax.value,
-          thThrow:thThrow.value
+          thFps:thFps.value, thThrow:thThrow.value
         }));
       } catch(e){}
     }
@@ -354,7 +361,7 @@
       const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
       set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
       set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax);
-      set(thThrow,vThrow,s.thThrow);
+      set(thFps,vFps,s.thFps); set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
       if(s.pxPerMeter){ pxPerMeter=s.pxPerMeter; calibState.textContent=`✓ ${pxPerMeter.toFixed(1)}px/m`; }
       if(s.mode){ mode=s.mode; applyMode(); }
@@ -439,7 +446,7 @@
       el.textContent = msg;
       el.classList.add('show');
       clearTimeout(toastTimer);
-      toastTimer = setTimeout(()=>{ el.classList.remove('show'); }, 3000);
+      toastTimer = setTimeout(()=>{ el.classList.remove('show'); }, 2000);
     }
 
     // ---- 開鏡頭 ----
@@ -492,10 +499,16 @@
 
     // ---- 偵測迴圈 ----
     const visited = new Uint8Array(PROC_W * 1080);
+    let lastDetectFrame = 0;
     function detectLoop(){
       if (!running) return;
-      const ball = detectBall();
-      draw(ball);
+      const now = performance.now();
+      const interval = 1000 / (+thFps.value || 20);
+      if (now - lastDetectFrame >= interval){
+        lastDetectFrame = now;
+        const ball = detectBall();
+        draw(ball);
+      }
       requestAnimationFrame(detectLoop);
     }
 
