@@ -145,7 +145,7 @@
   <div id="status">📷 等待啟動…</div>
   <div id="bigReadout"></div>
   <div id="dbg"></div>
-  <div id="version">v0.7.5</div>
+  <div id="version">v0.7.6</div>
   <button id="startBtn">▶ 開啟後鏡頭</button>
   <div id="error"></div>
   <button id="gearBtn">⚙</button>
@@ -212,6 +212,11 @@
         <span class="val" id="vFps">20</span>
       </div>
       <div class="row">
+        <label>判定週期ms</label>
+        <input type="range" id="thGap" min="200" max="5000" step="100" value="2000">
+        <span class="val" id="vGap">2000</span>
+      </div>
+      <div class="row">
         <label>出手門檻km/h</label>
         <input type="range" id="thThrow" min="5" max="60" value="15">
         <span class="val" id="vThrow">15</span>
@@ -259,6 +264,8 @@
     const bigReadout = document.getElementById('bigReadout');
     const thFps    = document.getElementById('thFps');
     const vFps     = document.getElementById('vFps');
+    const thGap    = document.getElementById('thGap');
+    const vGap     = document.getElementById('vGap');
     const thThrow  = document.getElementById('thThrow');
     const vThrow   = document.getElementById('vThrow');
     const voiceOn  = document.getElementById('voiceOn');
@@ -341,7 +348,7 @@
     function bind(sl, lab){ sl.oninput = () => { lab.textContent = sl.value; saveSettings(); }; }
     bind(thMot,vMot); bind(thBright,vBright); bind(thSat,vSat);
     bind(thMin,vMin); bind(thMax,vMax);
-    bind(thFps,vFps); bind(thThrow,vThrow);
+    bind(thFps,vFps); bind(thGap,vGap); bind(thThrow,vThrow);
 
     // ---- 設定持久化 ----
     const LS_KEY = 'ballspeed_settings_v3';
@@ -351,7 +358,7 @@
           mode, pxPerMeter, calibDist: calibDist.value,
           thMot:thMot.value, thBright:thBright.value, thSat:thSat.value,
           thMin:thMin.value, thMax:thMax.value,
-          thFps:thFps.value, thThrow:thThrow.value
+          thFps:thFps.value, thGap:thGap.value, thThrow:thThrow.value
         }));
       } catch(e){}
     }
@@ -361,7 +368,7 @@
       const set=(el,lab,v)=>{ if(v!=null){ el.value=v; if(lab)lab.textContent=v; } };
       set(thMot,vMot,s.thMot); set(thBright,vBright,s.thBright); set(thSat,vSat,s.thSat);
       set(thMin,vMin,s.thMin); set(thMax,vMax,s.thMax);
-      set(thFps,vFps,s.thFps); set(thThrow,vThrow,s.thThrow);
+      set(thFps,vFps,s.thFps); set(thGap,vGap,s.thGap); set(thThrow,vThrow,s.thThrow);
       if(s.calibDist!=null) calibDist.value=s.calibDist;
       if(s.pxPerMeter){ pxPerMeter=s.pxPerMeter; calibState.textContent=`✓ ${pxPerMeter.toFixed(1)}px/m`; }
       if(s.mode){ mode=s.mode; applyMode(); }
@@ -610,7 +617,7 @@
       const now=performance.now(), fps=1000/(now-lastT); lastT=now;
       const THROW_MIN = +thThrow.value;
 
-      if (track.length > 0 && (now - lastDetectT) > 400){
+      if (track.length > 0 && (now - lastDetectT) > (+thGap.value || 2000)){
         const r = estimateSpeed(track);
         const dbg = document.getElementById('dbg');
         let why = r.reason || '';
@@ -653,7 +660,6 @@
           + (curKmh!=null?` 即時${curKmh.toFixed(0)}km/h`:''));
       } else {
         updateBigReadout(null);
-        setStatus(`✅ ${fps.toFixed(0)}fps ${mode}\n🔍 未偵測到球`);
       }
     }
 
